@@ -1,8 +1,10 @@
 services:
   - type: web
-    name: Autoforwardbeta
+    name: autoforward-enhanced
     env: python
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python3 main.py
     envVars:
-      - fromDotEnv: true
+      - key: PYTHON_VERSION
+        value: 3.11.0
