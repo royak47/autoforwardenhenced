@@ -25,20 +25,23 @@ main_buttons = [[
 @Client.on_message(filters.private & filters.command(['start']))
 async def start(client, message):
     user = message.from_user
-    if Config.FORCE_SUB_ON:
+    if Config.FORCE_SUB_ON and Config.FORCE_SUB_CHANNEL:
         # Check if the user has joined the force subscription channel
         try:
             member = await client.get_chat_member(Config.FORCE_SUB_CHANNEL, user.id)
-            if member.status == "kicked":
+            if str(member.status) in ["kicked", "ChatMemberStatus.BANNED"]:
                 await client.send_message(
                     chat_id=message.chat.id,
                     text="You are banned from using this bot.",
                 )
                 return
-        except:
+        except Exception:
             # Send a message asking the user to join the channel
+            join_url = Config.FORCE_SUB_CHANNEL
+            if not join_url.startswith("http"):
+                join_url = f"https://t.me/{join_url.replace('@', '')}"
             join_button = [
-                [InlineKeyboardButton("Join Channel", url=f"{Config.FORCE_SUB_CHANNEL}")],
+                [InlineKeyboardButton("Join Channel", url=join_url)],
                 [InlineKeyboardButton("↻ Tʀʏ Aɢᴀɪɴ", url=f"https://t.me/{client.username}?start=start")]
             ]
             await client.send_message(
@@ -50,12 +53,15 @@ async def start(client, message):
 
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, message.from_user.mention)
-        # Log the new user to the log channel
-        log_channel = Config.LOG_CHANNEL # Replace with your log channel ID
-        await client.send_message(
-            chat_id=log_channel,
-            text=f"#NewUser\n\nIᴅ - {user.id}\nNᴀᴍᴇ - {message.from_user.mention}"
-        )
+        # Log the new user to the log channel (only if set)
+        if Config.LOG_CHANNEL and Config.LOG_CHANNEL != 0:
+            try:
+                await client.send_message(
+                    chat_id=Config.LOG_CHANNEL,
+                    text=f"#NewUser\n\nIᴅ - {user.id}\nNᴀᴍᴇ - {message.from_user.mention}"
+                )
+            except Exception as e:
+                print(f"Log channel error: {e}")
 
     reply_markup = InlineKeyboardMarkup(main_buttons)
     current_time = datetime.now(pytz.timezone(TIMEZONE))
