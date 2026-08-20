@@ -122,14 +122,20 @@ class CLIENT:
         'token': bot_token,
         'username': _bot.username 
     }
-    await db.add_bot(details)
+    ok = await db.add_bot(details)
+    if not ok:
+        await msg.reply_text("<b>⚠️ Limit reached! Maximum 5 bots/userbots allowed.</b>")
+        return False
 
-    # Log Channel future add by @Mr_Jisshu
-    log_channel = Config.LOG_CHANNEL  
-    bot_username = _bot.username
-    user_username = message.from_user.username
-    log_message = f"#addbot\n\nBot Username: @{bot_username}\nAdded by: @{user_username}"
-    await bot.send_message(chat_id=log_channel, text=log_message)
+    # Log Channel
+    if Config.LOG_CHANNEL and Config.LOG_CHANNEL != 0:
+        try:
+            bot_username = _bot.username
+            user_username = message.from_user.username
+            log_message = f"#addbot\n\nBot Username: @{bot_username}\nAdded by: @{user_username}"
+            await bot.send_message(chat_id=Config.LOG_CHANNEL, text=log_message)
+        except:
+            pass
 
     return True
      
@@ -221,8 +227,11 @@ class CLIENT:
     }
 
     # Add bot details to the database
-    await db.add_bot(details)
+    ok = await db.add_bot(details)
     await client.disconnect()
+    if not ok:
+        await bot.send_message(user_id, "<b>⚠️ Limit reached! Maximum 5 bots/userbots allowed.</b>")
+        return None
     return details    
     
   async def add_session(self, bot, message):
@@ -247,7 +256,10 @@ class CLIENT:
        'session': msg.text,
        'username': user.username
      }
-     await db.add_bot(details)
+     ok = await db.add_bot(details)
+     if not ok:
+        await msg.reply("<b>⚠️ Limit reached! Maximum 5 bots/userbots allowed.</b>")
+        return False
      return True
     
 @Client.on_message(filters.private & filters.command('reset'))

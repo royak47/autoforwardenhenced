@@ -18,7 +18,8 @@ class Database:
         self.bot = self.db.bots
         self.col = self.db.users
         self.nfy = self.db.notify
-        self.chl = self.db.channels 
+        self.chl = self.db.channels
+        self.jobs = self.db.forward_jobs  # persistent forward jobs for resume 
         
     def new_user(self, id, name):
         return dict(
@@ -150,19 +151,47 @@ class Database:
             return False
        
     async def add_bot(self, datas):
-        if not await self.is_bot_exist(datas['user_id']):
-            await self.bot.insert_one(datas)
+        """Add bot/userbot. Max 5 per user."""
+        count = await self.bot.count_documents({'user_id': int(datas['user_id'])})
+        if count >= 5:
+            return False  # limit reached
+        await self.bot.insert_one(datas)
+        return True
     
-    async def remove_bot(self, user_id):
-        await self.bot.delete_many({'user_id': int(user_id)})
+    async def remove_bot(self, user_id, bot_id=None):
+        """Remove one bot by _id or all bots of user"""
+        if bot_id:
+            from bson import ObjectId
+            try:
+                await self.bot.delete_one({'_id': ObjectId(bot_id), 'user_id': int(user_id)})
+            except:
+                await self.bot.delete_one({'_id': bot_id, 'user_id': int(user_id)})
+        else:
+            await self.bot.delete_many({'user_id': int(user_id)})
       
-    async def get_bot(self, user_id: int):
-        bot = await self.bot.find_one({'user_id': user_id})
+    async def get_bot(self, user_id: int, bot_id=None):
+        """Get one bot. If bot_id given, get specific. Else get first one (backward compatible)."""
+        if bot_id:
+            from bson import ObjectId
+            try:
+                bot = await self.bot.find_one({'_id': ObjectId(bot_id), 'user_id': int(user_id)})
+            except:
+                bot = await self.bot.find_one({'_id': bot_id, 'user_id': int(user_id)})
+            return bot if bot else None
+        bot = await self.bot.find_one({'user_id': int(user_id)})
         return bot if bot else None
+
+    async def get_all_bots(self, user_id: int):
+        """Get all bots/userbots of a user (max 5)"""
+        bots = self.bot.find({'user_id': int(user_id)})
+        return [b async for b in bots]
                                           
     async def is_bot_exist(self, user_id):
-        bot = await self.bot.find_one({'user_id': user_id})
+        bot = await self.bot.find_one({'user_id': int(user_id)})
         return bool(bot)
+
+    async def bot_count(self, user_id: int):
+        return await self.bot.count_documents({'user_id': int(user_id)})
                                           
     async def in_channel(self, user_id: int, chat_id: int) -> bool:
         channel = await self.chl.find_one({"user_id": int(user_id), "chat_id": int(chat_id)})
@@ -215,5 +244,66 @@ class Database:
     
     async def get_all_frwd(self):
         return self.nfy.find({})
+
+    # ========== Persistent Forward Jobs (for resume after restart) ==========
+    
+    async def save_job(self, job_data: dict):
+        """Save or update a forward job. job_data must have 'job_id'."""
+        job_id = job_data.get('job_id')
+        if not job_id:
+            return False
+        job_data['updated_at'] = __import__('time').time()
+        await self.jobs.update_one(
+            {'job_id': job_id},
+            {'$set': job_data},
+            upsert=True
+        )
+        return True
+
+    async def update_job_progress(self, job_id: str, current_id: int, fetched: int = 0, forwarded: int = 0):
+        """Update progress of a running job so it can resume."""
+        await self.jobs.update_one(
+            {'job_id': job_id},
+            {'$set': {
+                'current_id': current_id,
+                'fetched': fetched,
+                'forwarded': forwarded,
+                'updated_at': __import__('time').time(),
+                'status': 'running'
+            }}
+        )
+
+    async def get_job(self, job_id: str):
+        return await self.jobs.find_one({'job_id': job_id})
+
+    async def get_pending_jobs(self, user_id: int = None):
+        """Get jobs that are still running / incomplete."""
+        query = {'status': {'$in': ['running', 'pending']}}
+        if user_id:
+            query['user_id'] = int(user_id)
+        return [j async for j in self.jobs.find(query)]
+
+    async def complete_job(self, job_id: str):
+        await self.jobs.update_one(
+            {'job_id': job_id},
+            {'$set': {'status': 'completed', 'updated_at': __import__('time').time()}}
+        )
+
+    async def cancel_job(self, job_id: str):
+        await self.jobs.update_one(
+            {'job_id': job_id},
+            {'$set': {'status': 'cancelled', 'updated_at': __import__('time').time()}}
+        )
+
+    async def delete_job(self, job_id: str):
+        await self.jobs.delete_one({'job_id': job_id})
+
+    async def clear_old_jobs(self, max_age_hours=48):
+        """Clean completed/cancelled jobs older than max_age_hours."""
+        cutoff = __import__('time').time() - (max_age_hours * 3600)
+        await self.jobs.delete_many({
+            'status': {'$in': ['completed', 'cancelled']},
+            'updated_at': {'$lt': cutoff}
+        })
 
 db = Database(Config.DATABASE_URI, Config.DATABASE_NAME)

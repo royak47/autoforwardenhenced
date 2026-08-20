@@ -35,6 +35,13 @@ async def pub_(bot, message):
       return await message.answer("In Target chat a task is progressing. please wait until task complete", show_alert=True)
     m = await msg_edit(message.message, "<b>verifying your data's, please wait..</b>")
     _bot, caption, forward_tag, data, protect, button = await sts.get_data(user)
+
+    # Use the bot that user selected in /forward (supports multiple bots)
+    if hasattr(STS, 'extra') and frwd_id in getattr(STS, 'extra', {}):
+        selected = STS.extra[frwd_id].get('selected_bot')
+        if selected:
+            _bot = selected
+
     if not _bot:
       return await msg_edit(m, "<b>You didn't added any bot. Please add a bot using /settings !</b>", wait=True)
     
@@ -62,13 +69,40 @@ async def pub_(bot, message):
     temp.forwardings += 1
     await db.add_frwd(user)
     
+    # ===== Save job for resume support =====
+    job_id = frwd_id
+    job_data = {
+        'job_id': job_id,
+        'user_id': user,
+        'from_chat': sts.get('FROM'),
+        'to_chat': sts.get('TO'),
+        'skip': int(sts.get('skip') or 0),
+        'limit': int(sts.get('limit') or 0),
+        'current_id': int(sts.get('skip') or 0),
+        'fetched': 0,
+        'forwarded': 0,
+        'min_views': min_views,
+        'top_n': top_n,
+        'forward_tag': forward_tag,
+        'protect': protect,
+        'bot_data': {
+            'is_bot': _bot.get('is_bot'),
+            'token': _bot.get('token'),
+            'session': _bot.get('session'),
+            'name': _bot.get('name'),
+            'username': _bot.get('username'),
+        },
+        'status': 'running',
+    }
+    await db.save_job(job_data)
+    
     mode_txt = ""
     if min_views > 0:
         mode_txt += f"\n• Min Views: <b>{min_views:,}</b>"
     if top_n > 0:
         mode_txt += f"\n• Top N by Views: <b>{top_n}</b>"
     
-    await send(client, user, f"<b>🚥 ғᴏʀᴡᴀʀᴅɪɴɢ sᴛᴀʀᴛᴇᴅ</b>{mode_txt}")
+    await send(client, user, f"<b>🚥 ғᴏʀᴡᴀʀᴅɪɴɢ sᴛᴀʀᴛᴇᴅ</b>{mode_txt}\n\n<i>Restart hone pe bhi yahi se continue hoga.</i>")
     sts.add(time=True)
     sleep = 1 if _bot['is_bot'] else 8
     await msg_edit(m, "<b>Processing...</b>") 
@@ -89,9 +123,16 @@ async def pub_(bot, message):
             offset=int(sts.get('skip')) if sts.get('skip') else 0
             ):
                 if await is_cancelled(client, user, m, sts):
+                   await db.cancel_job(job_id)
                    return
                 if pling % 20 == 0: 
                    await edit(m, 'Progressing', 10, sts)
+                   # Save progress every 20 messages for resume
+                   try:
+                       cur_id = message.id if hasattr(message, 'id') else sts.get('fetched')
+                       await db.update_job_progress(job_id, cur_id, sts.get('fetched'), sts.get('total_files'))
+                   except:
+                       pass
                 pling += 1
                 sts.add('fetched')
                 
@@ -105,7 +146,7 @@ async def pub_(bot, message):
                    sts.add('deleted')
                    continue
                 
-                # ===== NEW: Views Filter =====
+                # ===== Views Filter =====
                 msg_views = getattr(message, 'views', None) or 0
                 if min_views > 0 and msg_views < min_views:
                     sts.add('filtered')
@@ -141,7 +182,6 @@ async def pub_(bot, message):
           # ===== TOP N by Views Mode =====
           if top_n > 0 and candidates:
               await msg_edit(m, f"<b>Sorting {len(candidates)} messages by views...</b>")
-              # Sort by views descending
               candidates.sort(key=lambda x: x[0], reverse=True)
               top_messages = candidates[:top_n]
               
@@ -149,6 +189,7 @@ async def pub_(bot, message):
               
               for views, message in top_messages:
                   if await is_cancelled(client, user, m, sts):
+                      await db.cancel_job(job_id)
                       return
                   if forward_tag:
                       await forward(client, [message.id], m, sts, protect)
@@ -161,8 +202,16 @@ async def pub_(bot, message):
                   
         except Exception as e:
             await msg_edit(m, f'<b>ERROR:</b>\n<code>{e}</code>', wait=True)
+            # Keep job as running so it can be resumed
+            try:
+                await db.update_job_progress(job_id, sts.get('fetched'), sts.get('fetched'), sts.get('total_files'))
+            except:
+                pass
             temp.IS_FRWD_CHAT.remove(sts.TO)
             return await stop(client, user)
+        
+        # Completed successfully
+        await db.complete_job(job_id)
         temp.IS_FRWD_CHAT.remove(sts.TO)
         await send(client, user, "<b>🎉 ғᴏʀᴡᴀᴅɪɴɢ ᴄᴏᴍᴘʟᴇᴛᴇᴅ</b>")
         await edit(m, 'Completed', "completed", sts) 

@@ -96,47 +96,109 @@ Filters reset successfully."""
        
   elif type=="bots":
      buttons = [] 
-     _bot = await db.get_bot(user_id)
-     if _bot is not None:
-        buttons.append([InlineKeyboardButton(_bot['name'],
-                         callback_data=f"settings#editbot")])
-     else:
+     all_bots = await db.get_all_bots(user_id)
+     count = len(all_bots)
+     
+     if all_bots:
+        for b in all_bots:
+           btype = "🤖 Bot" if b.get('is_bot') else "👤 Userbot"
+           name = b.get('name', 'Unknown')
+           bid = str(b.get('_id', ''))
+           buttons.append([InlineKeyboardButton(
+              f"{btype} | {name}",
+              callback_data=f"settings#editbot_{bid}"
+           )])
+     
+     if count < 5:
         buttons.append([InlineKeyboardButton('✚ Add bot ✚', 
                          callback_data="settings#addbot")])
         buttons.append([InlineKeyboardButton('✚ Add User bot ✚', 
                          callback_data="settings#adduserbot")])
         buttons.append([InlineKeyboardButton('✚ Login User bot ✚', 
                          callback_data="settings#addlogin")])
+     else:
+        buttons.append([InlineKeyboardButton('⚠️ Limit reached (5/5)', callback_data="settings#bots")])
+     
      buttons.append([InlineKeyboardButton('↩ Back', 
                       callback_data="settings#main")])
      await query.message.edit_text(
-       "<b><u>My Bots</b></u>\n\n<b>You can manage your bots in here</b>",
+       f"<b><u>My Bots / Userbots</b></u>\n\n"
+       f"<b>Added: {count}/5</b>\n"
+       f"You can add up to 5 bots or userbots.\n"
+       f"Forward karte time choose kar sakte ho kaunsa use karna hai.",
        reply_markup=InlineKeyboardMarkup(buttons))
   
   elif type=="addbot":
+     count = await db.bot_count(user_id)
+     if count >= 5:
+        return await query.answer("Maximum 5 bots/userbots allowed!", show_alert=True)
      await query.message.delete()
-     bot = await CLIENT.add_bot(bot, query)
-     if bot != True: return
-     await query.message.reply_text(
-        "<b>bot token successfully added to db</b>",
-        reply_markup=InlineKeyboardMarkup(buttons))
+     result = await CLIENT.add_bot(bot, query)
+     if result != True: return
+     await bot.send_message(user_id,
+        "<b>✅ Bot token successfully added!</b>\n\nAb /settings → Bots se dekh sakte ho.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('↩ My Bots', callback_data="settings#bots")]]))
 
-   
   elif type == "addlogin":
+     count = await db.bot_count(user_id)
+     if count >= 5:
+        return await query.answer("Maximum 5 bots/userbots allowed!", show_alert=True)
      await query.message.delete()
      user = await CLIENT.add_login(bot, query)
      if user is None: return    
-     await query.message.reply_text(
-        "<b>Bot token successfully added to DB</b>",
-        reply_markup=InlineKeyboardMarkup(buttons))
+     await bot.send_message(user_id,
+        "<b>✅ Userbot successfully added via Login!</b>",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('↩ My Bots', callback_data="settings#bots")]]))
   
   elif type=="adduserbot":
+     count = await db.bot_count(user_id)
+     if count >= 5:
+        return await query.answer("Maximum 5 bots/userbots allowed!", show_alert=True)
      await query.message.delete()
-     user = await CLIENT.add_session(bot, query)
-     if user != True: return
-     await query.message.reply_text(
-        "<b>session successfully added to db</b>",
-        reply_markup=InlineKeyboardMarkup(buttons))
+     result = await CLIENT.add_session(bot, query)
+     if result != True: return
+     await bot.send_message(user_id,
+        "<b>✅ Session successfully added!</b>",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('↩ My Bots', callback_data="settings#bots")]]))
+  
+  elif type.startswith("editbot_"):
+     bot_id = type.split("_", 1)[1]
+     _bot = await db.get_bot(user_id, bot_id)
+     if not _bot:
+        return await query.answer("Bot not found", show_alert=True)
+     btype = "Bot" if _bot.get('is_bot') else "Userbot"
+     buttons = [
+        [InlineKeyboardButton('❌ Remove this', callback_data=f"settings#removebot_{bot_id}")],
+        [InlineKeyboardButton('↩ Back', callback_data="settings#bots")]
+     ]
+     await query.message.edit_text(
+        f"<b>{btype}: {_bot.get('name', 'Unknown')}</b>\n\n"
+        f"Username: @{_bot.get('username', 'N/A')}\n"
+        f"Type: {'🤖 Bot Token' if _bot.get('is_bot') else '👤 Userbot Session'}",
+        reply_markup=InlineKeyboardMarkup(buttons)
+     )
+  
+  elif type.startswith("removebot_"):
+     bot_id = type.split("_", 1)[1]
+     await db.remove_bot(user_id, bot_id)
+     await query.answer("✅ Removed!", show_alert=True)
+     # refresh list
+     all_bots = await db.get_all_bots(user_id)
+     buttons = []
+     for b in all_bots:
+        btype = "🤖 Bot" if b.get('is_bot') else "👤 Userbot"
+        name = b.get('name', 'Unknown')
+        bid = str(b.get('_id', ''))
+        buttons.append([InlineKeyboardButton(f"{btype} | {name}", callback_data=f"settings#editbot_{bid}")])
+     if len(all_bots) < 5:
+        buttons.append([InlineKeyboardButton('✚ Add bot ✚', callback_data="settings#addbot")])
+        buttons.append([InlineKeyboardButton('✚ Add User bot ✚', callback_data="settings#adduserbot")])
+        buttons.append([InlineKeyboardButton('✚ Login User bot ✚', callback_data="settings#addlogin")])
+     buttons.append([InlineKeyboardButton('↩ Back', callback_data="settings#main")])
+     await query.message.edit_text(
+        f"<b>My Bots / Userbots</b>\n\nAdded: {len(all_bots)}/5",
+        reply_markup=InlineKeyboardMarkup(buttons)
+     )
   
   elif type=="channels":
      buttons = []

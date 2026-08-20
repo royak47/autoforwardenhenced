@@ -17,12 +17,39 @@ async def run(bot, message):
     buttons = []
     btn_data = {}
     user_id = message.from_user.id
-    _bot = await db.get_bot(user_id)
-    if not _bot:
-      return await message.reply("<code>You didn't added any bot. Please add a bot using /settings !</code>")
+    
+    all_bots = await db.get_all_bots(user_id)
+    if not all_bots:
+      return await message.reply("<code>You didn't added any bot/userbot.\nPlease add using /settings !</code>")
+    
+    # ===== Choose Bot / Userbot (if more than 1) =====
+    if len(all_bots) == 1:
+        _bot = all_bots[0]
+    else:
+        bot_map = {}
+        btn_list = []
+        for b in all_bots:
+            btype = "🤖" if b.get('is_bot') else "👤"
+            name = b.get('name', 'Unknown')
+            key = f"{btype} {name}"
+            btn_list.append([KeyboardButton(key)])
+            bot_map[key] = b
+        btn_list.append([KeyboardButton("cancel")])
+        
+        choice = await bot.ask(
+            message.chat.id,
+            f"<b>Kaunsa Bot / Userbot use karna hai?</b>\n\nTotal added: {len(all_bots)}/5",
+            reply_markup=ReplyKeyboardMarkup(btn_list, one_time_keyboard=True, resize_keyboard=True)
+        )
+        if choice.text.startswith(('/', 'cancel')):
+            return await message.reply_text(Translation.CANCEL, reply_markup=ReplyKeyboardRemove())
+        _bot = bot_map.get(choice.text)
+        if not _bot:
+            return await message.reply_text("Galat choice!", reply_markup=ReplyKeyboardRemove())
+    
     channels = await db.get_user_channels(user_id)
     if not channels:
-       return await message.reply_text("please set a to channel in /settings before forwarding")
+       return await message.reply_text("please set a to channel in /settings before forwarding", reply_markup=ReplyKeyboardRemove())
     
     # ===== Target Channel Selection =====
     if len(channels) > 1:
@@ -30,7 +57,7 @@ async def run(bot, message):
           buttons.append([KeyboardButton(f"{channel['title']}")])
           btn_data[channel['title']] = channel['chat_id']
        buttons.append([KeyboardButton("cancel")]) 
-       _toid = await bot.ask(message.chat.id, Translation.TO_MSG.format(_bot['name'], _bot['username']), reply_markup=ReplyKeyboardMarkup(buttons, one_time_keyboard=True, resize_keyboard=True))
+       _toid = await bot.ask(message.chat.id, Translation.TO_MSG.format(_bot['name'], _bot.get('username', '')), reply_markup=ReplyKeyboardMarkup(buttons, one_time_keyboard=True, resize_keyboard=True))
        if _toid.text.startswith(('/', 'cancel')):
           return await message.reply_text(Translation.CANCEL, reply_markup=ReplyKeyboardRemove())
        to_title = _toid.text
@@ -185,14 +212,15 @@ Confirm karke Start dabao."""
         reply_markup=reply_markup
     )
     
-    # Store: chat_id, toid, skip (start), limit (end), direction, count
+    # Store: chat_id, toid, skip (start), limit (end)
     STS(forward_id).store(chat_id, toid, skip, limit)
     
-    # Extra data store for direction (we'll use STS extra if needed)
+    # Extra data: selected bot + direction info
     if not hasattr(STS, 'extra'):
         STS.extra = {}
     STS.extra[forward_id] = {
         "direction": direction,
         "count": count,
-        "ref_msg_id": ref_msg_id
+        "ref_msg_id": ref_msg_id,
+        "selected_bot": _bot   # the chosen bot/userbot
     }
